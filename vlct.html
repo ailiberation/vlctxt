@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VLC Messenger</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        body { margin: 0; font-family: Arial, sans-serif; background: #f0f0f0; }
+        #modeSelect { text-align: center; padding: 10px; }
+        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; cursor: pointer; }
+        .tab { display: none; }
+        #senderScreen { width: 100vw; height: calc(100vh - 150px); background-color: #ffffff; }
+        video { width: 100%; max-height: 50vh; }
+        #canvas { display: none; }
+        #output { margin: 10px; padding: 10px; background: #eee; }
+    </style>
+</head>
+<body>
+    <div id="modeSelect">
+        <button onclick="switchMode('sender')">Sender Mode</button>
+        <button onclick="switchMode('receiver')">Receiver Mode</button>
+    </div>
+    <div id="sender" class="tab">
+        <div id="senderScreen"></div>
+        <div style="position: absolute; top: 60px; left: 10px; background: rgba(0,0,0,0.5); color: white; padding: 10px;">
+            <button onclick="startFlashing()">Start Sending</button>
+            <button onclick="stopFlashing()">Stop</button>
+            <p>Message: <input type="text" id="message" value="Hello"></p>
+        </div>
+    </div>
+    <div id="receiver" class="tab">
+        <video id="video" autoplay playsinline></video>
+        <canvas id="canvas"></canvas>
+        <div style="text-align: center;">
+            <button onclick="startReceiving()">Start Receiving</button>
+            <button onclick="stopReceiving()">Stop</button>
+        </div>
+        <div id="output">Received Message: <span id="receivedMessage"></span></div>
+    </div>
+    <script>
+        let flashingInterval, receivingInterval;
+        let binaryData = '';
+        const senderScreen = document.getElementById('senderScreen');
+        const video = document.getElementById('video');
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const messageSpan = document.getElementById('receivedMessage');
+        const flashRate = 16; // Approx 60Hz
+
+        function switchMode(mode) {
+            document.getElementById('sender').style.display = mode === 'sender' ? 'block' : 'none';
+            document.getElementById('receiver').style.display = mode === 'receiver' ? 'block' : 'none';
+        }
+
+        function textToBinary(text) {
+            return text.split('').map(char => char.charCodeAt(0).toString(2).padStart(8, '0')).join('');
+        }
+
+        function startFlashing() {
+            const message = document.getElementById('message').value;
+            const binary = textToBinary(message);
+            let index = 0;
+            flashingInterval = setInterval(() => {
+                if (index < binary.length) {
+                    senderScreen.style.backgroundColor = binary[index] === '1' ? '#ffffff' : '#000000';
+                    index++;
+                } else {
+                    senderScreen.style.backgroundColor = '#ffffff';
+                    clearInterval(flashingInterval);
+                }
+            }, flashRate);
+        }
+
+        function stopFlashing() {
+            clearInterval(flashingInterval);
+            senderScreen.style.backgroundColor = '#ffffff';
+        }
+
+        async function startReceiving() {
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            video.srcObject = stream;
+            video.play();
+            canvas.width = video.videoWidth || 640;
+            canvas.height = video.videoHeight || 480;
+            messageSpan.textContent = '';
+            binaryData = '';
+            receivingInterval = setInterval(captureFrame, 16);
+        }
+        function stopReceiving() {
+            clearInterval(receivingInterval);
+          const stream = video.srcObject;
+            if (stream) stream.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+            convertBinaryToText();
+        }
+
+        function captureFrame() {
+            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            const brightness = getAverageBrightness(imageData);
+            binaryData += brightness > 127 ? '1' : '0';
+            if (binaryData.length >= 80) {
+                convertBinaryToText();
+            }
+        }
+
+        function getAverageBrightness(imageData) {
+            let sum = 0;
+            for (let i = 0; i < imageData.data.length; i += 4) {
+                sum += (imageData.data[i] + imageData.data[i+1] + imageData.data[i+2]) / 3;
+            }
+            return sum / (imageData.data.length / 4);
+        }
+
+        function convertBinaryToText() {
+            let text = '';
+            for (let i = 0; i < binaryData.length; i += 8) {
+                const byte = binaryData.slice(i, i+8);
+                if (byte.length === 8) text += String.fromCharCode(parseInt(byte, 2));
+            }
+            messageSpan.textContent = text || 'Decoding...';
+        }
+
+        switchMode('sender');
+    </script>
+</body>
+</html>
