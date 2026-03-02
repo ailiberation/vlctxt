@@ -5,148 +5,523 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VLC Messenger</title>
     <link rel="manifest" href="manifest.json">
-    <script src="https://cdn.jsdelivr.net/npm/reed-solomon-js@latest/reedSolomon.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@bnb-chain/reed-solomon/dist/index.aio.js"></script>
     <style>
-        body { margin: 0; font-family: Arial, sans-serif; background: #f0f0f0; }
-        #modeSelect { text-align: center; padding: 10px; }
-        button { padding: 10px 20px; margin: 5px; background: #007bff; color: white; border: none; cursor: pointer; }
+        * { box-sizing: border-box; }
+        body { 
+            margin: 0; 
+            font-family: Arial, sans-serif; 
+            background: #f0f0f0;
+        }
+        #modeSelect { 
+            text-align: center; 
+            padding: 10px; 
+            background: #333;
+        }
+        button { 
+            padding: 10px 20px; 
+            margin: 5px; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not-allowed; }
         .tab { display: none; }
-        #senderScreen { width: 100vw; height: calc(100vh - 150px); background-color: #ffffff; }
-        video { width: 100%; max-height: 50vh; }
+        .tab.active { display: block; }
+        #senderScreen { 
+            width: 100vw; 
+            height: calc(100vh - 200px); 
+            background-color: #ffffff;
+            transition: background-color 0.016s;
+        }
+        #video { 
+            width: 100%; 
+            max-height: 60vh;
+            background: #000;
+        }
         #canvas { display: none; }
-        #output { margin: 10px; padding: 10px; background: #eee; }
+        .control-panel {
+            position: absolute;
+            top: 60px;
+            left: 10px;
+            background: rgba(0,0,0,0.8);
+            color: white;
+            padding: 15px;
+            border-radius: 4px;
+            z-index: 100;
+        }
+        .control-panel input {
+            padding: 8px;
+            margin: 5px 0;
+            width: 100%;
+            border: none;
+            border-radius: 4px;
+        }
+        .output-panel {
+            margin: 10px;
+            padding: 15px;
+            background: #eee;
+            border-radius: 4px;
+            border-left: 4px solid #007bff;
+        }
+        .output-panel h3 {
+            margin-top: 0;
+        }
+        .status {
+            font-size: 12px;
+            color: #666;
+            margin-top: 10px;
+        }
+        .error {
+            color: #d32f2f;
+        }
+        .success {
+            color: #388e3c;
+        }
     </style>
 </head>
 <body>
     <div id="modeSelect">
-        <button onclick="switchMode('sender')">Sender Mode</button>
-        <button onclick="switchMode('receiver')">Receiver Mode</button>
+        <button onclick="switchMode('sender')">📤 Sender Mode</button>
+        <button onclick="switchMode('receiver')">📥 Receiver Mode</button>
     </div>
+
     <div id="sender" class="tab">
         <div id="senderScreen"></div>
-        <div style="position: absolute; top: 60px; left: 10px; background: rgba(0,0,0,0.5); color: white; padding: 10px;">
-            <button onclick="startFlashing()">Start Sending</button>
-            <button onclick="stopFlashing()">Stop</button>
-            <p>Message: <input type="text" id="message" value="Hello"></p>
+        <div class="control-panel">
+            <h3>Sender Controls</h3>
+            <label>Message:</label>
+            <input type="text" id="message" value="Hello World" placeholder="Enter message to send">
+            <button onclick="startFlashing()" id="startBtn">▶ Start Sending</button>
+            <button onclick="stopFlashing()" id="stopBtn" disabled>⏹ Stop</button>
+            <div class="status" id="senderStatus"></div>
         </div>
     </div>
+
     <div id="receiver" class="tab">
-        <video id="video" autoplay playsinline></video>
+        <video id="video" autoplay playsinline muted></video>
         <canvas id="canvas"></canvas>
-        <div style="text-align: center;">
-            <button onclick="startReceiving()">Start Receiving</button>
-            <button onclick="stopReceiving()">Stop</button>
+        <div style="text-align: center; padding: 10px;">
+            <button onclick="startReceiving()" id="receiveStartBtn">▶ Start Receiving</button>
+            <button onclick="stopReceiving()" id="receiveStopBtn" disabled>⏹ Stop</button>
         </div>
-        <div id="output">Received Message: <span id="receivedMessage"></span></div>
+        <div class="output-panel">
+            <h3>Received Message</h3>
+            <span id="receivedMessage" style="font-size: 18px; font-weight: bold;">Waiting...</span>
+            <div class="status" id="receiverStatus"></div>
+            <div class="status" id="receiverDebug"></div>
+        </div>
     </div>
+
     <script>
-        let flashingInterval, receivingInterval;
-        let binaryData = '';
-        const senderScreen = document.getElementById('senderScreen');
-        const video = document.getElementById('video');
-        const canvas = document.getElementById('canvas');
-        const ctx = canvas.getContext('2d');
-        const messageSpan = document.getElementById('receivedMessage');
-        const flashRate = 16; // Approx 60Hz
+        // Configuration
+        const CONFIG = {
+            PREAMBLE: '11110000',
+            FRAME_DELIMITER: '10101010',
+            BITS_PER_FRAME: 8,
+            FLASH_RATE_MS: 50, // ~20Hz for better camera capture
+            BRIGHTNESS_THRESHOLD: 127,
+            MIN_BITS_TO_DECODE: 160,
+            REED_SOLOMON_ENABLED: true
+        };
 
+        // State variables
+        let state = {
+            flashingInterval: null,
+            receivingInterval: null,
+            binaryData: '',
+            isReceiving: false,
+            isSending: false,
+            rsEncoder: null,
+            rsDecoder: null
+        };
+
+        /**
+         * Initialize Reed-Solomon encoder/decoder
+         */
+        async function initReedSolomon() {
+            try {
+                // The @bnb-chain/reed-solomon library provides RS functionality
+                // Create instances for encoding and decoding
+                state.rsEncoder = new RS.ReedSolomon();
+                state.rsDecoder = new RS.ReedSolomon();
+                console.log('Reed-Solomon initialized successfully');
+                return true;
+            } catch (e) {
+                console.error('Failed to initialize Reed-Solomon:', e);
+                updateSenderStatus('⚠ Reed-Solomon unavailable, using raw data', 'warning');
+                return false;
+            }
+        }
+
+        /**
+         * Switch between sender and receiver mode
+         */
         function switchMode(mode) {
-            document.getElementById('sender').style.display = mode === 'sender' ? 'block' : 'none';
-            document.getElementById('receiver').style.display = mode === 'receiver' ? 'block' : 'none';
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.getElementById(mode).classList.add('active');
+            
+            // Reset state
+            stopFlashing();
+            stopReceiving();
+            
+            console.log('Switched to', mode, 'mode');
         }
 
+        /**
+         * Convert text to binary representation
+         */
         function textToBinary(text) {
-            return text.split('').map(char => char.charCodeAt(0).toString(2).padStart(8, '0')).join('');
+            return text.split('').map(char => {
+                const code = char.charCodeAt(0);
+                return code.toString(2).padStart(8, '0');
+            }).join('');
         }
 
-        function startFlashing() {
-            const message = document.getElementById('message').value;
-            const encoded = encodeReedSolomon(message); // Encode with RS
-            let index = 0;
-            const encodedBinary = textToBinary(String.fromCharCode(...encoded));
-            flashingInterval = setInterval(() => {
-                if (index < encodedBinary.length) {
-                    senderScreen.style.backgroundColor = encodedBinary[index] === '1' ? '#ffffff' : '#000000';
-                    index++;
-                } else {
-                    senderScreen.style.backgroundColor = '#ffffff';
-                    clearInterval(flashingInterval);
+        /**
+         * Convert binary to text
+         */
+        function binaryToText(binaryStr) {
+            let text = '';
+            for (let i = 0; i < binaryStr.length; i += 8) {
+                const byte = binaryStr.slice(i, i + 8);
+                if (byte.length === 8) {
+                    const charCode = parseInt(byte, 2);
+                    if (charCode > 0 && charCode < 127) { // Valid ASCII range
+                        text += String.fromCharCode(charCode);
+                    }
                 }
-            }, flashRate);
+            }
+            return text;
         }
 
-        function encodeReedSolomon(data) {
-            // Simplified Reed-Solomon encoding (using a library)
-            // For demo, assume a (255,223) RS code, correcting up to 16 errors
-            const rs = new ReedSolomon(255, 223);
-            return rs.encode(data.split('').map(c => c.charCodeAt(0)));
+        /**
+         * Encode data with Reed-Solomon error correction
+         */
+        async function encodeWithRS(data) {
+            if (!CONFIG.REED_SOLOMON_ENABLED || !state.rsEncoder) {
+                // Fallback: just return the data as-is
+                return new Uint8Array(data.split('').map(c => c.charCodeAt(0)));
+            }
+
+            try {
+                const input = new Uint8Array(data.split('').map(c => c.charCodeAt(0)));
+                const encoded = await state.rsEncoder.encode(input);
+                return encoded;
+            } catch (e) {
+                console.error('RS encoding error:', e);
+                return new Uint8Array(data.split('').map(c => c.charCodeAt(0)));
+            }
         }
 
+        /**
+         * Decode data with Reed-Solomon error correction
+         */
+        async function decodeWithRS(encodedData) {
+            if (!CONFIG.REED_SOLOMON_ENABLED || !state.rsDecoder) {
+                // Fallback: just convert bytes back to string
+                try {
+                    return String.fromCharCode(...encodedData);
+                } catch (e) {
+                    return '';
+                }
+            }
+
+            try {
+                const input = new Uint8Array(encodedData);
+                const decoded = await state.rsDecoder.decode(input);
+                return String.fromCharCode(...decoded);
+            } catch (e) {
+                console.error('RS decoding error:', e);
+                try {
+                    return String.fromCharCode(...encodedData);
+                } catch {
+                    return '';
+                }
+            }
+        }
+
+        /**
+         * Start flashing the screen with encoded message
+         */
+        async function startFlashing() {
+            if (state.isSending) return;
+
+            const message = document.getElementById('message').value;
+            if (!message) {
+                updateSenderStatus('Please enter a message', 'error');
+                return;
+            }
+
+            state.isSending = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+
+            try {
+                updateSenderStatus('Encoding message...', 'info');
+
+                // Create payload with preamble
+                let payload = CONFIG.PREAMBLE + textToBinary(message);
+
+                // Encode with Reed-Solomon if available
+                if (CONFIG.REED_SOLOMON_ENABLED) {
+                    updateSenderStatus('Applying Reed-Solomon encoding...', 'info');
+                    const encoded = await encodeWithRS(message);
+                    payload = CONFIG.PREAMBLE + textToBinary(String.fromCharCode(...encoded));
+                }
+
+                updateSenderStatus(`Sending ${payload.length} bits (${message.length} chars)...`, 'success');
+
+                let bitIndex = 0;
+                const senderScreen = document.getElementById('senderScreen');
+
+                state.flashingInterval = setInterval(() => {
+                    if (bitIndex < payload.length) {
+                        const bit = payload[bitIndex];
+                        senderScreen.style.backgroundColor = bit === '1' ? '#ffffff' : '#000000';
+                        bitIndex++;
+                    } else {
+                        // Send final frame as white
+                        senderScreen.style.backgroundColor = '#ffffff';
+                        clearInterval(state.flashingInterval);
+                        state.isSending = false;
+                        state.flashingInterval = null;
+                        document.getElementById('startBtn').disabled = false;
+                        document.getElementById('stopBtn').disabled = true;
+                        updateSenderStatus('✓ Message sent!', 'success');
+                    }
+                }, CONFIG.FLASH_RATE_MS);
+
+            } catch (e) {
+                console.error('Error in startFlashing:', e);
+                updateSenderStatus('Error: ' + e.message, 'error');
+                state.isSending = false;
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            }
+        }
+
+        /**
+         * Stop flashing
+         */
         function stopFlashing() {
-            clearInterval(flashingInterval);
-            senderScreen.style.backgroundColor = '#ffffff';
+            if (state.flashingInterval) {
+                clearInterval(state.flashingInterval);
+                state.flashingInterval = null;
+            }
+            document.getElementById('senderScreen').style.backgroundColor = '#ffffff';
+            state.isSending = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
         }
 
+        /**
+         * Start receiving video frames
+         */
         async function startReceiving() {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facing
-          Mode: 'environment' } });
-            video.srcObject = stream;
-            video.play();
-            canvas.width = video.videoWidth || 640;
-            canvas.height = video.videoHeight || 480;
-            messageSpan.textContent = '';
-            binaryData = '';
-            receivingInterval = setInterval(captureFrame, 16);
+            if (state.isReceiving) return;
+
+            state.isReceiving = true;
+            document.getElementById('receiveStartBtn').disabled = true;
+            document.getElementById('receiveStopBtn').disabled = false;
+
+            try {
+                updateReceiverStatus('Requesting camera access...', 'info');
+
+                // Fixed: facingMode should be in one line, not split
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        facingMode: 'environment',
+                        width: { ideal: 640 },
+                        height: { ideal: 480 }
+                    }
+                });
+
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+
+                // Wait for video to be ready
+                await new Promise(resolve => {
+                    video.onloadedmetadata = resolve;
+                });
+
+                const canvas = document.getElementById('canvas');
+                canvas.width = video.videoWidth || 640;
+                canvas.height = video.videoHeight || 480;
+
+                updateReceiverStatus('Camera ready. Capturing frames...', 'success');
+                state.binaryData = '';
+                document.getElementById('receivedMessage').textContent = 'Listening...';
+
+                state.receivingInterval = setInterval(captureFrame, CONFIG.FLASH_RATE_MS);
+
+            } catch (e) {
+                console.error('Error starting receiver:', e);
+                updateReceiverStatus('Camera error: ' + e.message, 'error');
+                state.isReceiving = false;
+                document.getElementById('receiveStartBtn').disabled = false;
+                document.getElementById('receiveStopBtn').disabled = true;
+            }
         }
 
+        /**
+         * Stop receiving
+         */
         function stopReceiving() {
-            clearInterval(receivingInterval);
-            const stream = video.srcObject;
-            if (stream) stream.getTracks().forEach(track => track.stop());
-            video.srcObject = null;
-            convertBinaryToText();
-        }
+            if (state.receivingInterval) {
+                clearInterval(state.receivingInterval);
+                state.receivingInterval = null;
+            }
 
-        function captureFrame() {
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const brightness = getAverageBrightness(imageData);
-            binaryData += brightness > 127 ? '1' : '0';
-            if (binaryData.length >= 80) {
+            const video = document.getElementById('video');
+            if (video.srcObject) {
+                video.srcObject.getTracks().forEach(track => track.stop());
+                video.srcObject = null;
+            }
+
+            state.isReceiving = false;
+            document.getElementById('receiveStartBtn').disabled = false;
+            document.getElementById('receiveStopBtn').disabled = true;
+            
+            // Attempt final decode
+            if (state.binaryData.length > 0) {
                 convertBinaryToText();
             }
         }
 
+        /**
+         * Capture and analyze frame
+         */
+        function captureFrame() {
+            try {
+                const video = document.getElementById('video');
+                const canvas = document.getElementById('canvas');
+                const ctx = canvas.getContext('2d');
+
+                if (video.readyState === video.HAVE_ENOUGH_DATA) {
+                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                    const brightness = getAverageBrightness(imageData);
+                    const bit = brightness > CONFIG.BRIGHTNESS_THRESHOLD ? '1' : '0';
+                    state.binaryData += bit;
+
+                    // Try to decode when we have enough data
+                    if (state.binaryData.length >= CONFIG.MIN_BITS_TO_DECODE) {
+                        convertBinaryToText();
+                    }
+
+                    updateReceiverDebug(`Bits: ${state.binaryData.length} | Brightness: ${brightness.toFixed(0)}`);
+                }
+            } catch (e) {
+                console.error('Error in captureFrame:', e);
+            }
+        }
+
+        /**
+         * Calculate average brightness of image
+         */
         function getAverageBrightness(imageData) {
             let sum = 0;
-            for (let i = 0; i < imageData.data.length; i += 4) {
-                sum += (imageData.data[i] + imageData.data[i+1] + imageData.data[i+2]) / 3;
+            const data = imageData.data;
+            for (let i = 0; i < data.length; i += 4) {
+                // Standard luminosity formula
+                sum += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
             }
-            return sum / (imageData.data.length / 4);
+            return sum / (data.length / 4);
         }
 
-        function convertBinaryToText() {
-            let text = '';
-            let bytes = [];
-            for (let i = 0; i < binaryData.length; i += 8) {
-                const byte = binaryData.slice(i, i+8);
-                if (byte.length === 8) bytes.push(parseInt(byte, 2));
-            }
+        /**
+         * Convert binary data to text and decode
+         */
+        async function convertBinaryToText() {
             try {
-                const decoded = decodeReedSolomon(bytes); // Decode with RS
-                text = String.fromCharCode(...decoded);
+                // Look for preamble
+                const preambleIndex = state.binaryData.indexOf(CONFIG.PREAMBLE);
+                if (preambleIndex === -1) {
+                    updateReceiverStatus('Waiting for preamble...', 'info');
+                    return;
+                }
+
+                // Extract data after preamble
+                const dataStart = preambleIndex + CONFIG.PREAMBLE.length;
+                const binaryData = state.binaryData.substring(dataStart);
+
+                if (binaryData.length < 8) {
+                    return; // Need at least 1 byte
+                }
+
+                // Convert binary to bytes
+                const bytes = [];
+                for (let i = 0; i < binaryData.length; i += 8) {
+                    const byte = binaryData.slice(i, i + 8);
+                    if (byte.length === 8) {
+                        bytes.push(parseInt(byte, 2));
+                    }
+                }
+
+                // Decode with Reed-Solomon if available
+                let text = '';
+                if (CONFIG.REED_SOLOMON_ENABLED && state.rsDecoder) {
+                    text = await decodeWithRS(bytes);
+                } else {
+                    text = String.fromCharCode(...bytes);
+                }
+
+                // Filter out non-printable characters
+                text = text.replace(/[^\x20-\x7E]/g, '').trim();
+
+                if (text.length > 0) {
+                    document.getElementById('receivedMessage').textContent = text;
+                    updateReceiverStatus('✓ Message decoded successfully!', 'success');
+                } else {
+                    updateReceiverStatus('Decoding in progress...', 'info');
+                }
+
             } catch (e) {
-                text = 'Error decoding';
+                console.error('Error in convertBinaryToText:', e);
+                updateReceiverStatus('Decode error: ' + e.message, 'error');
             }
-            messageSpan.textContent = text || 'Decoding...';
         }
 
-        function decodeReedSolomon(encodedData) {
-            // Simplified Reed-Solomon decoding
-            const rs = new ReedSolomon(255, 223);
-            return rs.decode(encodedData);
+        /**
+         * Update sender status message
+         */
+        function updateSenderStatus(message, type = 'info') {
+            const status = document.getElementById('senderStatus');
+            status.textContent = message;
+            status.className = 'status ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : '');
         }
 
-        switchMode('sender');
+        /**
+         * Update receiver status message
+         */
+        function updateReceiverStatus(message, type = 'info') {
+            const status = document.getElementById('receiverStatus');
+            status.textContent = message;
+            status.className = 'status ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : '');
+        }
+
+        /**
+         * Update receiver debug info
+         */
+        function updateReceiverDebug(message) {
+            document.getElementById('receiverDebug').textContent = message;
+        }
+
+        /**
+         * Initialize on page load
+         */
+        window.addEventListener('DOMContentLoaded', async () => {
+            console.log('Initializing VLC Messenger...');
+            await initReedSolomon();
+            switchMode('sender');
+        });
     </script>
 </body>
-</html>                                                                     
+</html>
