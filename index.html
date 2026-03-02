@@ -3,20 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>VLC Messenger</title>
+    <title>VLC Messenger - Light-Based Communication</title>
     <link rel="manifest" href="manifest.json">
-    <script src="https://cdn.jsdelivr.net/npm/@bnb-chain/reed-solomon/dist/index.aio.js"></script>
     <style>
         * { box-sizing: border-box; }
         body { 
             margin: 0; 
-            font-family: Arial, sans-serif; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
             background: #f0f0f0;
+            color: #333;
         }
         #modeSelect { 
             text-align: center; 
-            padding: 10px; 
-            background: #333;
+            padding: 15px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
         }
         button { 
             padding: 10px 20px; 
@@ -27,60 +28,104 @@
             cursor: pointer;
             border-radius: 4px;
             font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
         }
-        button:hover { background: #0056b3; }
-        button:disabled { background: #ccc; cursor: not-allowed; }
+        button:hover { background: #0056b3; transform: translateY(-2px); }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
         .tab { display: none; }
         .tab.active { display: block; }
         #senderScreen { 
             width: 100vw; 
             height: calc(100vh - 200px); 
             background-color: #ffffff;
-            transition: background-color 0.016s;
+            transition: background-color 0.05s linear;
         }
         #video { 
             width: 100%; 
-            max-height: 60vh;
+            height: calc(100vh - 200px);
             background: #000;
+            object-fit: cover;
         }
         #canvas { display: none; }
         .control-panel {
             position: absolute;
-            top: 60px;
-            left: 10px;
-            background: rgba(0,0,0,0.8);
+            top: 70px;
+            left: 15px;
+            background: rgba(0,0,0,0.9);
             color: white;
-            padding: 15px;
-            border-radius: 4px;
+            padding: 20px;
+            border-radius: 8px;
             z-index: 100;
+            max-width: 300px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+        }
+        .control-panel h3 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+        }
+        .control-panel label {
+            display: block;
+            margin-top: 10px;
+            font-size: 13px;
+            font-weight: 600;
         }
         .control-panel input {
             padding: 8px;
-            margin: 5px 0;
+            margin-top: 5px;
+            margin-bottom: 10px;
             width: 100%;
             border: none;
             border-radius: 4px;
+            font-size: 13px;
         }
         .output-panel {
-            margin: 10px;
-            padding: 15px;
-            background: #eee;
-            border-radius: 4px;
-            border-left: 4px solid #007bff;
+            margin: 15px;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            border-left: 5px solid #007bff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
         }
         .output-panel h3 {
-            margin-top: 0;
+            margin: 0 0 15px 0;
+            font-size: 16px;
+        }
+        #receivedMessage {
+            display: block;
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            margin: 10px 0;
+            word-break: break-all;
+            min-height: 40px;
         }
         .status {
             font-size: 12px;
-            color: #666;
+            color: #999;
             margin-top: 10px;
+            padding: 8px;
+            border-radius: 4px;
+            background: #f9f9f9;
         }
         .error {
             color: #d32f2f;
+            background: #ffebee;
         }
         .success {
             color: #388e3c;
+            background: #e8f5e9;
+        }
+        .info {
+            color: #1976d2;
+            background: #e3f2fd;
+        }
+        .warning {
+            color: #f57f17;
+            background: #fff3e0;
         }
     </style>
 </head>
@@ -93,9 +138,11 @@
     <div id="sender" class="tab">
         <div id="senderScreen"></div>
         <div class="control-panel">
-            <h3>Sender Controls</h3>
+            <h3>📤 Sender Controls</h3>
             <label>Message:</label>
-            <input type="text" id="message" value="Hello World" placeholder="Enter message to send">
+            <input type="text" id="message" value="Hello" placeholder="Enter message">
+            <label>Flash Speed (ms):</label>
+            <input type="number" id="flashSpeed" value="50" min="30" max="200" step="10">
             <button onclick="startFlashing()" id="startBtn">▶ Start Sending</button>
             <button onclick="stopFlashing()" id="stopBtn" disabled>⏹ Stop</button>
             <div class="status" id="senderStatus"></div>
@@ -110,53 +157,119 @@
             <button onclick="stopReceiving()" id="receiveStopBtn" disabled>⏹ Stop</button>
         </div>
         <div class="output-panel">
-            <h3>Received Message</h3>
-            <span id="receivedMessage" style="font-size: 18px; font-weight: bold;">Waiting...</span>
+            <h3>📥 Received Message</h3>
+            <div id="receivedMessage">Waiting for signal...</div>
             <div class="status" id="receiverStatus"></div>
             <div class="status" id="receiverDebug"></div>
         </div>
     </div>
 
     <script>
-        // Configuration
+        // ============================================
+        // SIMPLE HAMMING CODE ERROR CORRECTION
+        // ============================================
+        
+        class SimpleECC {
+            /**
+             * Encode 4 data bits into 7 bits using Hamming(7,4)
+             * Returns string of 7 bits
+             */
+            static encode7_4(dataBits) {
+                // dataBits should be 4-character string like "1010"
+                const d1 = parseInt(dataBits[0]);
+                const d2 = parseInt(dataBits[1]);
+                const d3 = parseInt(dataBits[2]);
+                const d4 = parseInt(dataBits[3]);
+
+                // Calculate parity bits
+                const p1 = (d1 + d2 + d4) % 2;
+                const p2 = (d1 + d3 + d4) % 2;
+                const p3 = (d2 + d3 + d4) % 2;
+
+                // Return: p1 p2 d1 p3 d2 d3 d4
+                return `${p1}${p2}${d1}${p3}${d2}${d3}${d4}`;
+            }
+
+            /**
+             * Decode 7 bits using Hamming(7,4) error correction
+             */
+            static decode7_4(encodedBits) {
+                const bits = encodedBits.split('').map(Number);
+                const [p1, p2, d1, p3, d2, d3, d4] = bits;
+
+                // Calculate syndrome
+                const s1 = (p1 + d1 + d4) % 2;
+                const s2 = (p2 + d1 + d3 + d4) % 2;
+                const s3 = (p3 + d2 + d3 + d4) % 2;
+
+                const errorPos = s1 * 1 + s2 * 2 + s3 * 4;
+
+                // Correct error if found
+                if (errorPos > 0) {
+                    bits[errorPos - 1] = 1 - bits[errorPos - 1];
+                }
+
+                // Extract data bits: positions 2, 4, 5, 6 (0-indexed: 1, 3, 4, 6)
+                return `${bits[2]}${bits[4]}${bits[5]}${bits[6]}`;
+            }
+
+            /**
+             * Encode a character to binary with ECC
+             */
+            static encodeChar(char) {
+                const code = char.charCodeAt(0);
+                const binary = code.toString(2).padStart(8, '0');
+                
+                // Split into 2 x 4-bit chunks
+                const chunk1 = binary.substring(0, 4);
+                const chunk2 = binary.substring(4, 8);
+                
+                const encoded1 = this.encode7_4(chunk1);
+                const encoded2 = this.encode7_4(chunk2);
+                
+                return encoded1 + encoded2; // 14 bits total
+            }
+
+            /**
+             * Decode a character from binary with ECC
+             */
+            static decodeChar(binaryStr) {
+                if (binaryStr.length < 14) return '';
+                
+                const encoded1 = binaryStr.substring(0, 7);
+                const encoded2 = binaryStr.substring(7, 14);
+                
+                const data1 = this.decode7_4(encoded1);
+                const data2 = this.decode7_4(encoded2);
+                
+                const binary = data1 + data2;
+                const code = parseInt(binary, 2);
+                
+                return code > 0 && code < 127 ? String.fromCharCode(code) : '';
+            }
+        }
+
+        // ============================================
+        // CONFIGURATION & STATE
+        // ============================================
+        
         const CONFIG = {
-            PREAMBLE: '11110000',
-            FRAME_DELIMITER: '10101010',
-            BITS_PER_FRAME: 8,
-            FLASH_RATE_MS: 50, // ~20Hz for better camera capture
+            PREAMBLE: '11110000', // 8 bits
+            SYNC_WORD: '10101010', // 8 bits
+            FRAME_RATE_MS: 50,
             BRIGHTNESS_THRESHOLD: 127,
-            MIN_BITS_TO_DECODE: 160,
-            REED_SOLOMON_ENABLED: true
+            MIN_BITS_TO_DECODE: 200,
+            USE_ECC: true
         };
 
-        // State variables
         let state = {
             flashingInterval: null,
             receivingInterval: null,
             binaryData: '',
             isReceiving: false,
             isSending: false,
-            rsEncoder: null,
-            rsDecoder: null
+            frameCount: 0
         };
-
-        /**
-         * Initialize Reed-Solomon encoder/decoder
-         */
-        async function initReedSolomon() {
-            try {
-                // The @bnb-chain/reed-solomon library provides RS functionality
-                // Create instances for encoding and decoding
-                state.rsEncoder = new RS.ReedSolomon();
-                state.rsDecoder = new RS.ReedSolomon();
-                console.log('Reed-Solomon initialized successfully');
-                return true;
-            } catch (e) {
-                console.error('Failed to initialize Reed-Solomon:', e);
-                updateSenderStatus('⚠ Reed-Solomon unavailable, using raw data', 'warning');
-                return false;
-            }
-        }
 
         /**
          * Switch between sender and receiver mode
@@ -167,7 +280,6 @@
             });
             document.getElementById(mode).classList.add('active');
             
-            // Reset state
             stopFlashing();
             stopReceiving();
             
@@ -175,85 +287,54 @@
         }
 
         /**
-         * Convert text to binary representation
+         * Convert text to binary with optional error correction
          */
         function textToBinary(text) {
-            return text.split('').map(char => {
-                const code = char.charCodeAt(0);
-                return code.toString(2).padStart(8, '0');
-            }).join('');
+            let binary = '';
+            for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (CONFIG.USE_ECC) {
+                    binary += SimpleECC.encodeChar(char); // 14 bits per char
+                } else {
+                    const code = char.charCodeAt(0);
+                    binary += code.toString(2).padStart(8, '0');
+                }
+            }
+            return binary;
         }
 
         /**
-         * Convert binary to text
+         * Convert binary to text with optional error correction
          */
         function binaryToText(binaryStr) {
             let text = '';
-            for (let i = 0; i < binaryStr.length; i += 8) {
-                const byte = binaryStr.slice(i, i + 8);
-                if (byte.length === 8) {
-                    const charCode = parseInt(byte, 2);
-                    if (charCode > 0 && charCode < 127) { // Valid ASCII range
-                        text += String.fromCharCode(charCode);
-                    }
+            const step = CONFIG.USE_ECC ? 14 : 8;
+            
+            for (let i = 0; i < binaryStr.length; i += step) {
+                const chunk = binaryStr.substring(i, i + step);
+                let char = '';
+                
+                if (CONFIG.USE_ECC && chunk.length === 14) {
+                    char = SimpleECC.decodeChar(chunk);
+                } else if (!CONFIG.USE_ECC && chunk.length === 8) {
+                    const code = parseInt(chunk, 2);
+                    char = code > 0 && code < 127 ? String.fromCharCode(code) : '';
                 }
+                
+                if (char) text += char;
             }
             return text;
         }
 
         /**
-         * Encode data with Reed-Solomon error correction
-         */
-        async function encodeWithRS(data) {
-            if (!CONFIG.REED_SOLOMON_ENABLED || !state.rsEncoder) {
-                // Fallback: just return the data as-is
-                return new Uint8Array(data.split('').map(c => c.charCodeAt(0)));
-            }
-
-            try {
-                const input = new Uint8Array(data.split('').map(c => c.charCodeAt(0)));
-                const encoded = await state.rsEncoder.encode(input);
-                return encoded;
-            } catch (e) {
-                console.error('RS encoding error:', e);
-                return new Uint8Array(data.split('').map(c => c.charCodeAt(0)));
-            }
-        }
-
-        /**
-         * Decode data with Reed-Solomon error correction
-         */
-        async function decodeWithRS(encodedData) {
-            if (!CONFIG.REED_SOLOMON_ENABLED || !state.rsDecoder) {
-                // Fallback: just convert bytes back to string
-                try {
-                    return String.fromCharCode(...encodedData);
-                } catch (e) {
-                    return '';
-                }
-            }
-
-            try {
-                const input = new Uint8Array(encodedData);
-                const decoded = await state.rsDecoder.decode(input);
-                return String.fromCharCode(...decoded);
-            } catch (e) {
-                console.error('RS decoding error:', e);
-                try {
-                    return String.fromCharCode(...encodedData);
-                } catch {
-                    return '';
-                }
-            }
-        }
-
-        /**
-         * Start flashing the screen with encoded message
+         * Start flashing the screen
          */
         async function startFlashing() {
             if (state.isSending) return;
 
             const message = document.getElementById('message').value;
+            const flashSpeed = parseInt(document.getElementById('flashSpeed').value);
+            
             if (!message) {
                 updateSenderStatus('Please enter a message', 'error');
                 return;
@@ -266,37 +347,36 @@
             try {
                 updateSenderStatus('Encoding message...', 'info');
 
-                // Create payload with preamble
-                let payload = CONFIG.PREAMBLE + textToBinary(message);
-
-                // Encode with Reed-Solomon if available
-                if (CONFIG.REED_SOLOMON_ENABLED) {
-                    updateSenderStatus('Applying Reed-Solomon encoding...', 'info');
-                    const encoded = await encodeWithRS(message);
-                    payload = CONFIG.PREAMBLE + textToBinary(String.fromCharCode(...encoded));
-                }
-
-                updateSenderStatus(`Sending ${payload.length} bits (${message.length} chars)...`, 'success');
+                // Build payload: PREAMBLE + SYNC + Message
+                let payload = CONFIG.PREAMBLE + CONFIG.SYNC_WORD + textToBinary(message);
+                
+                const bitsPerChar = CONFIG.USE_ECC ? 14 : 8;
+                const status = CONFIG.USE_ECC 
+                    ? `Sending with error correction (${message.length} chars = ${payload.length} bits)`
+                    : `Sending ${message.length} chars = ${payload.length} bits`;
+                
+                updateSenderStatus(status, 'success');
 
                 let bitIndex = 0;
                 const senderScreen = document.getElementById('senderScreen');
+                state.frameCount = 0;
 
                 state.flashingInterval = setInterval(() => {
                     if (bitIndex < payload.length) {
                         const bit = payload[bitIndex];
                         senderScreen.style.backgroundColor = bit === '1' ? '#ffffff' : '#000000';
                         bitIndex++;
+                        state.frameCount++;
                     } else {
-                        // Send final frame as white
                         senderScreen.style.backgroundColor = '#ffffff';
                         clearInterval(state.flashingInterval);
                         state.isSending = false;
                         state.flashingInterval = null;
                         document.getElementById('startBtn').disabled = false;
                         document.getElementById('stopBtn').disabled = true;
-                        updateSenderStatus('✓ Message sent!', 'success');
+                        updateSenderStatus(`✓ Message sent! (${state.frameCount} frames)`, 'success');
                     }
-                }, CONFIG.FLASH_RATE_MS);
+                }, flashSpeed);
 
             } catch (e) {
                 console.error('Error in startFlashing:', e);
@@ -334,32 +414,35 @@
             try {
                 updateReceiverStatus('Requesting camera access...', 'info');
 
-                // Fixed: facingMode should be in one line, not split
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: 'environment',
-                        width: { ideal: 640 },
-                        height: { ideal: 480 }
-                    }
+                        width: { ideal: 1280 },
+                        height: { ideal: 720 }
+                    },
+                    audio: false
                 });
 
                 const video = document.getElementById('video');
                 video.srcObject = stream;
 
-                // Wait for video to be ready
                 await new Promise(resolve => {
-                    video.onloadedmetadata = resolve;
+                    video.onloadedmetadata = () => {
+                        video.play();
+                        resolve();
+                    };
                 });
 
                 const canvas = document.getElementById('canvas');
-                canvas.width = video.videoWidth || 640;
-                canvas.height = video.videoHeight || 480;
+                canvas.width = video.videoWidth || 1280;
+                canvas.height = video.videoHeight || 720;
 
-                updateReceiverStatus('Camera ready. Capturing frames...', 'success');
+                updateReceiverStatus('🎥 Camera ready. Listening for signal...', 'success');
                 state.binaryData = '';
-                document.getElementById('receivedMessage').textContent = 'Listening...';
+                document.getElementById('receivedMessage').textContent = '🎧 Listening...';
+                state.frameCount = 0;
 
-                state.receivingInterval = setInterval(captureFrame, CONFIG.FLASH_RATE_MS);
+                state.receivingInterval = setInterval(captureFrame, CONFIG.FRAME_RATE_MS);
 
             } catch (e) {
                 console.error('Error starting receiver:', e);
@@ -389,14 +472,13 @@
             document.getElementById('receiveStartBtn').disabled = false;
             document.getElementById('receiveStopBtn').disabled = true;
             
-            // Attempt final decode
             if (state.binaryData.length > 0) {
                 convertBinaryToText();
             }
         }
 
         /**
-         * Capture and analyze frame
+         * Capture frame and extract brightness bit
          */
         function captureFrame() {
             try {
@@ -410,13 +492,15 @@
                     const brightness = getAverageBrightness(imageData);
                     const bit = brightness > CONFIG.BRIGHTNESS_THRESHOLD ? '1' : '0';
                     state.binaryData += bit;
+                    state.frameCount++;
 
-                    // Try to decode when we have enough data
                     if (state.binaryData.length >= CONFIG.MIN_BITS_TO_DECODE) {
                         convertBinaryToText();
                     }
 
-                    updateReceiverDebug(`Bits: ${state.binaryData.length} | Brightness: ${brightness.toFixed(0)}`);
+                    if (state.frameCount % 20 === 0) {
+                        updateReceiverDebug(`📊 ${state.frameCount} frames | ${state.binaryData.length} bits | 🔆 ${brightness.toFixed(0)}`);
+                    }
                 }
             } catch (e) {
                 console.error('Error in captureFrame:', e);
@@ -424,63 +508,55 @@
         }
 
         /**
-         * Calculate average brightness of image
+         * Calculate average brightness
          */
         function getAverageBrightness(imageData) {
             let sum = 0;
             const data = imageData.data;
             for (let i = 0; i < data.length; i += 4) {
-                // Standard luminosity formula
                 sum += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
             }
             return sum / (data.length / 4);
         }
 
         /**
-         * Convert binary data to text and decode
+         * Convert binary to text
          */
-        async function convertBinaryToText() {
+        function convertBinaryToText() {
             try {
-                // Look for preamble
                 const preambleIndex = state.binaryData.indexOf(CONFIG.PREAMBLE);
                 if (preambleIndex === -1) {
-                    updateReceiverStatus('Waiting for preamble...', 'info');
+                    return; // Still waiting for preamble
+                }
+
+                const syncIndex = state.binaryData.indexOf(CONFIG.SYNC_WORD, preambleIndex + CONFIG.PREAMBLE.length);
+                if (syncIndex === -1) {
+                    return; // Still waiting for sync
+                }
+
+                const dataStart = syncIndex + CONFIG.SYNC_WORD.length;
+                const binaryData = state.binaryData.substring(dataStart);
+                const step = CONFIG.USE_ECC ? 14 : 8;
+
+                if (binaryData.length < step) {
                     return;
                 }
 
-                // Extract data after preamble
-                const dataStart = preambleIndex + CONFIG.PREAMBLE.length;
-                const binaryData = state.binaryData.substring(dataStart);
-
-                if (binaryData.length < 8) {
-                    return; // Need at least 1 byte
-                }
-
-                // Convert binary to bytes
-                const bytes = [];
-                for (let i = 0; i < binaryData.length; i += 8) {
-                    const byte = binaryData.slice(i, i + 8);
-                    if (byte.length === 8) {
-                        bytes.push(parseInt(byte, 2));
-                    }
-                }
-
-                // Decode with Reed-Solomon if available
-                let text = '';
-                if (CONFIG.REED_SOLOMON_ENABLED && state.rsDecoder) {
-                    text = await decodeWithRS(bytes);
-                } else {
-                    text = String.fromCharCode(...bytes);
-                }
-
-                // Filter out non-printable characters
+                let text = binaryToText(binaryData);
+                
+                // Clean up text
                 text = text.replace(/[^\x20-\x7E]/g, '').trim();
 
                 if (text.length > 0) {
                     document.getElementById('receivedMessage').textContent = text;
-                    updateReceiverStatus('✓ Message decoded successfully!', 'success');
+                    updateReceiverStatus(`✅ Decoded successfully! (${state.frameCount} frames captured)`, 'success');
+                    
+                    // Stop auto-updates after successful decode
+                    if (state.receivingInterval) {
+                        clearInterval(state.receivingInterval);
+                    }
                 } else {
-                    updateReceiverStatus('Decoding in progress...', 'info');
+                    updateReceiverStatus('🔍 Decoding in progress...', 'info');
                 }
 
             } catch (e) {
@@ -490,38 +566,24 @@
         }
 
         /**
-         * Update sender status message
+         * Update sender status
          */
         function updateSenderStatus(message, type = 'info') {
             const status = document.getElementById('senderStatus');
             status.textContent = message;
-            status.className = 'status ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : '');
+            status.className = 'status ' + type;
         }
 
         /**
-         * Update receiver status message
+         * Update receiver status
          */
         function updateReceiverStatus(message, type = 'info') {
             const status = document.getElementById('receiverStatus');
             status.textContent = message;
-            status.className = 'status ' + (type === 'error' ? 'error' : type === 'success' ? 'success' : '');
+            status.className = 'status ' + type;
         }
 
         /**
          * Update receiver debug info
          */
-        function updateReceiverDebug(message) {
-            document.getElementById('receiverDebug').textContent = message;
-        }
-
-        /**
-         * Initialize on page load
-         */
-        window.addEventListener('DOMContentLoaded', async () => {
-            console.log('Initializing VLC Messenger...');
-            await initReedSolomon();
-            switchMode('sender');
-        });
-    </script>
-</body>
-</html>
+        function updateRec*
