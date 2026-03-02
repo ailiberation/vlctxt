@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>VLC Messenger</title>
     <link rel="manifest" href="manifest.json">
+    <script src="https://cdn.jsdelivr.net/npm/reed-solomon-js@latest/reedSolomon.min.js"></script>
     <style>
         body { margin: 0; font-family: Arial, sans-serif; background: #f0f0f0; }
         #modeSelect { text-align: center; padding: 10px; }
@@ -58,34 +59,13 @@
         }
 
         function startFlashing() {
-    const message = document.getElementById('message').value;
-    const binary = textToBinary(message);
-    const encoded = encodeReedSolomon(message); // Encode with RS
-    let index = 0;
-    const encodedBinary = textToBinary(String.fromCharCode(...encoded));
-    flashingInterval = setInterval(() => {
-        if (index < encodedBinary.length) {
-            senderScreen.style.backgroundColor = encodedBinary[index] === '1' ? '#ffffff' : '#000000';
-            index++;
-        } else {
-            senderScreen.style.backgroundColor = '#ffffff';
-            clearInterval(flashingInterval);
-        }
-    }, flashRate);
-}
-
-function encodeReedSolomon(data) {
-    // Simplified Reed-Solomon encoding (using a library)
-    // For demo, assume a (255,223) RS code, correcting up to 16 errors
-    const rs = new ReedSolomon(255, 223);
-    return rs.encode(data.split('').map(c => c.charCodeAt(0)));
-}
             const message = document.getElementById('message').value;
-            const binary = textToBinary(message);
+            const encoded = encodeReedSolomon(message); // Encode with RS
             let index = 0;
+            const encodedBinary = textToBinary(String.fromCharCode(...encoded));
             flashingInterval = setInterval(() => {
-                if (index < binary.length) {
-                    senderScreen.style.backgroundColor = binary[index] === '1' ? '#ffffff' : '#000000';
+                if (index < encodedBinary.length) {
+                    senderScreen.style.backgroundColor = encodedBinary[index] === '1' ? '#ffffff' : '#000000';
                     index++;
                 } else {
                     senderScreen.style.backgroundColor = '#ffffff';
@@ -94,13 +74,21 @@ function encodeReedSolomon(data) {
             }, flashRate);
         }
 
+        function encodeReedSolomon(data) {
+            // Simplified Reed-Solomon encoding (using a library)
+            // For demo, assume a (255,223) RS code, correcting up to 16 errors
+            const rs = new ReedSolomon(255, 223);
+            return rs.encode(data.split('').map(c => c.charCodeAt(0)));
+        }
+
         function stopFlashing() {
             clearInterval(flashingInterval);
             senderScreen.style.backgroundColor = '#ffffff';
         }
 
         async function startReceiving() {
-            const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+            const stream = await navigator.mediaDevices.getUserMedia({ video: { facing
+          Mode: 'environment' } });
             video.srcObject = stream;
             video.play();
             canvas.width = video.videoWidth || 640;
@@ -109,32 +97,13 @@ function encodeReedSolomon(data) {
             binaryData = '';
             receivingInterval = setInterval(captureFrame, 16);
         }
+
         function stopReceiving() {
             clearInterval(receivingInterval);
-          const stream = video.srcObject;
+            const stream = video.srcObject;
             if (stream) stream.getTracks().forEach(track => track.stop());
             video.srcObject = null;
-            function convertBinaryToText() {
-    let text = '';
-    let bytes = [];
-    for (let i = 0; i < binaryData.length; i += 8) {
-        const byte = binaryData.slice(i, i+8);
-        if (byte.length === 8) bytes.push(parseInt(byte, 2));
-    }
-    try {
-        const decoded = decodeReedSolomon(bytes); // Decode with RS
-        text = String.fromCharCode(...decoded);
-    } catch (e) {
-        text = 'Error decoding';
-    }
-    messageSpan.textContent = text || 'Decoding...';
-}
-
-function decodeReedSolomon(encodedData) {
-    // Simplified Reed-Solomon decoding
-    const rs = new ReedSolomon(255, 223);
-    return rs.decode(encodedData);
-}
+            convertBinaryToText();
         }
 
         function captureFrame() {
@@ -157,14 +126,27 @@ function decodeReedSolomon(encodedData) {
 
         function convertBinaryToText() {
             let text = '';
+            let bytes = [];
             for (let i = 0; i < binaryData.length; i += 8) {
                 const byte = binaryData.slice(i, i+8);
-                if (byte.length === 8) text += String.fromCharCode(parseInt(byte, 2));
+                if (byte.length === 8) bytes.push(parseInt(byte, 2));
+            }
+            try {
+                const decoded = decodeReedSolomon(bytes); // Decode with RS
+                text = String.fromCharCode(...decoded);
+            } catch (e) {
+                text = 'Error decoding';
             }
             messageSpan.textContent = text || 'Decoding...';
+        }
+
+        function decodeReedSolomon(encodedData) {
+            // Simplified Reed-Solomon decoding
+            const rs = new ReedSolomon(255, 223);
+            return rs.decode(encodedData);
         }
 
         switchMode('sender');
     </script>
 </body>
-</html>
+</html>                                                                     
