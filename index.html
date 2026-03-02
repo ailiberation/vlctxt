@@ -110,6 +110,9 @@
             padding: 8px;
             border-radius: 4px;
             background: #f9f9f9;
+            max-height: 200px;
+            overflow-y: auto;
+            font-family: monospace;
         }
         .error {
             color: #d32f2f;
@@ -127,6 +130,14 @@
             color: #f57f17;
             background: #fff3e0;
         }
+        .brightness-display {
+            display: inline-block;
+            width: 30px;
+            height: 30px;
+            margin: 5px;
+            border: 2px solid #666;
+            border-radius: 4px;
+        }
     </style>
 </head>
 <body>
@@ -140,9 +151,9 @@
         <div class="control-panel">
             <h3>📤 Sender Controls</h3>
             <label>Message:</label>
-            <input type="text" id="message" value="Hello" placeholder="Enter message">
+            <input type="text" id="message" value="Hi" placeholder="Enter message">
             <label>Flash Speed (ms):</label>
-            <input type="number" id="flashSpeed" value="50" min="30" max="200" step="10">
+            <input type="number" id="flashSpeed" value="100" min="30" max="200" step="10">
             <button onclick="startFlashing()" id="startBtn">▶ Start Sending</button>
             <button onclick="stopFlashing()" id="stopBtn" disabled>⏹ Stop</button>
             <div class="status" id="senderStatus"></div>
@@ -159,6 +170,8 @@
         <div class="output-panel">
             <h3>📥 Received Message</h3>
             <div id="receivedMessage">Waiting for signal...</div>
+            <div>Live Brightness:</div>
+            <div id="brightnessIndicator"></div>
             <div class="status" id="receiverStatus"></div>
             <div class="status" id="receiverDebug"></div>
         </div>
@@ -170,69 +183,49 @@
         // ============================================
         
         class SimpleECC {
-            /**
-             * Encode 4 data bits into 7 bits using Hamming(7,4)
-             * Returns string of 7 bits
-             */
             static encode7_4(dataBits) {
-                // dataBits should be 4-character string like "1010"
                 const d1 = parseInt(dataBits[0]);
                 const d2 = parseInt(dataBits[1]);
                 const d3 = parseInt(dataBits[2]);
                 const d4 = parseInt(dataBits[3]);
 
-                // Calculate parity bits
                 const p1 = (d1 + d2 + d4) % 2;
                 const p2 = (d1 + d3 + d4) % 2;
                 const p3 = (d2 + d3 + d4) % 2;
 
-                // Return: p1 p2 d1 p3 d2 d3 d4
                 return `${p1}${p2}${d1}${p3}${d2}${d3}${d4}`;
             }
 
-            /**
-             * Decode 7 bits using Hamming(7,4) error correction
-             */
             static decode7_4(encodedBits) {
                 const bits = encodedBits.split('').map(Number);
                 const [p1, p2, d1, p3, d2, d3, d4] = bits;
 
-                // Calculate syndrome
                 const s1 = (p1 + d1 + d4) % 2;
                 const s2 = (p2 + d1 + d3 + d4) % 2;
                 const s3 = (p3 + d2 + d3 + d4) % 2;
 
                 const errorPos = s1 * 1 + s2 * 2 + s3 * 4;
 
-                // Correct error if found
                 if (errorPos > 0) {
                     bits[errorPos - 1] = 1 - bits[errorPos - 1];
                 }
 
-                // Extract data bits: positions 2, 4, 5, 6 (0-indexed: 1, 3, 4, 6)
                 return `${bits[2]}${bits[4]}${bits[5]}${bits[6]}`;
             }
 
-            /**
-             * Encode a character to binary with ECC
-             */
             static encodeChar(char) {
                 const code = char.charCodeAt(0);
                 const binary = code.toString(2).padStart(8, '0');
                 
-                // Split into 2 x 4-bit chunks
                 const chunk1 = binary.substring(0, 4);
                 const chunk2 = binary.substring(4, 8);
                 
                 const encoded1 = this.encode7_4(chunk1);
                 const encoded2 = this.encode7_4(chunk2);
                 
-                return encoded1 + encoded2; // 14 bits total
+                return encoded1 + encoded2;
             }
 
-            /**
-             * Decode a character from binary with ECC
-             */
             static decodeChar(binaryStr) {
                 if (binaryStr.length < 14) return '';
                 
@@ -254,11 +247,11 @@
         // ============================================
         
         const CONFIG = {
-            PREAMBLE: '11110000', // 8 bits
-            SYNC_WORD: '10101010', // 8 bits
-            FRAME_RATE_MS: 50,
+            PREAMBLE: '11110000',
+            SYNC_WORD: '10101010',
+            FRAME_RATE_MS: 100,
             BRIGHTNESS_THRESHOLD: 127,
-            MIN_BITS_TO_DECODE: 200,
+            MIN_BITS_TO_DECODE: 150,
             USE_ECC: true
         };
 
@@ -268,7 +261,10 @@
             binaryData: '',
             isReceiving: false,
             isSending: false,
-            frameCount: 0
+            frameCount: 0,
+            canvas: null,
+            ctx: null,
+            lastBrightness: 0
         };
 
         /**
@@ -294,7 +290,7 @@
             for (let i = 0; i < text.length; i++) {
                 const char = text[i];
                 if (CONFIG.USE_ECC) {
-                    binary += SimpleECC.encodeChar(char); // 14 bits per char
+                    binary += SimpleECC.encodeChar(char);
                 } else {
                     const code = char.charCodeAt(0);
                     binary += code.toString(2).padStart(8, '0');
@@ -347,12 +343,11 @@
             try {
                 updateSenderStatus('Encoding message...', 'info');
 
-                // Build payload: PREAMBLE + SYNC + Message
                 let payload = CONFIG.PREAMBLE + CONFIG.SYNC_WORD + textToBinary(message);
                 
                 const bitsPerChar = CONFIG.USE_ECC ? 14 : 8;
                 const status = CONFIG.USE_ECC 
-                    ? `Sending with error correction (${message.length} chars = ${payload.length} bits)`
+                    ? `Sending with ECC (${message.length} chars = ${payload.length} bits)`
                     : `Sending ${message.length} chars = ${payload.length} bits`;
                 
                 updateSenderStatus(status, 'success');
@@ -412,7 +407,7 @@
             document.getElementById('receiveStopBtn').disabled = false;
 
             try {
-                updateReceiverStatus('Requesting camera access...', 'info');
+                updateReceiverStatus('🎥 Requesting camera access...', 'info');
 
                 const stream = await navigator.mediaDevices.getUserMedia({
                     video: {
@@ -425,32 +420,66 @@
 
                 const video = document.getElementById('video');
                 video.srcObject = stream;
+                
+                // Ensure video plays
+                try {
+                    await video.play();
+                } catch (e) {
+                    console.warn('Video play failed, retrying...', e);
+                }
 
-                await new Promise(resolve => {
-                    video.onloadedmetadata = () => {
-                        video.play();
+                // Wait for video metadata
+                await new Promise((resolve) => {
+                    const onLoadedMetadata = () => {
+                        video.removeEventListener('loadedmetadata', onLoadedMetadata);
                         resolve();
                     };
+                    video.addEventListener('loadedmetadata', onLoadedMetadata);
+                    setTimeout(resolve, 2000); // Fallback timeout
                 });
 
+                // Setup canvas with willReadFrequently for performance
                 const canvas = document.getElementById('canvas');
                 canvas.width = video.videoWidth || 1280;
                 canvas.height = video.videoHeight || 720;
+                
+                state.canvas = canvas;
+                state.ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-                updateReceiverStatus('🎥 Camera ready. Listening for signal...', 'success');
+                updateReceiverStatus('✅ Camera ready! Listening for signal... Point at sender screen.', 'success');
                 state.binaryData = '';
                 document.getElementById('receivedMessage').textContent = '🎧 Listening...';
                 state.frameCount = 0;
 
-                state.receivingInterval = setInterval(captureFrame, CONFIG.FRAME_RATE_MS);
+                // Use requestAnimationFrame for better timing
+                startCaptureLoop();
 
             } catch (e) {
                 console.error('Error starting receiver:', e);
-                updateReceiverStatus('Camera error: ' + e.message, 'error');
+                updateReceiverStatus('❌ Camera error: ' + e.message, 'error');
                 state.isReceiving = false;
                 document.getElementById('receiveStartBtn').disabled = false;
                 document.getElementById('receiveStopBtn').disabled = true;
             }
+        }
+
+        /**
+         * Capture loop using requestAnimationFrame
+         */
+        let lastCaptureTime = 0;
+        function startCaptureLoop() {
+            function loop() {
+                if (!state.isReceiving) return;
+
+                const now = Date.now();
+                if (now - lastCaptureTime >= CONFIG.FRAME_RATE_MS) {
+                    captureFrame();
+                    lastCaptureTime = now;
+                }
+
+                requestAnimationFrame(loop);
+            }
+            requestAnimationFrame(loop);
         }
 
         /**
@@ -483,25 +512,52 @@
         function captureFrame() {
             try {
                 const video = document.getElementById('video');
-                const canvas = document.getElementById('canvas');
-                const ctx = canvas.getContext('2d');
 
-                if (video.readyState === video.HAVE_ENOUGH_DATA) {
-                    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-                    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-                    const brightness = getAverageBrightness(imageData);
-                    const bit = brightness > CONFIG.BRIGHTNESS_THRESHOLD ? '1' : '0';
-                    state.binaryData += bit;
-                    state.frameCount++;
-
-                    if (state.binaryData.length >= CONFIG.MIN_BITS_TO_DECODE) {
-                        convertBinaryToText();
-                    }
-
-                    if (state.frameCount % 20 === 0) {
-                        updateReceiverDebug(`📊 ${state.frameCount} frames | ${state.binaryData.length} bits | 🔆 ${brightness.toFixed(0)}`);
-                    }
+                if (!state.canvas || !state.ctx) {
+                    console.error('Canvas or context not initialized');
+                    return;
                 }
+
+                // Check video readiness
+                if (video.readyState !== video.HAVE_ENOUGH_DATA && video.readyState !== video.HAVE_CURRENT_DATA) {
+                    return;
+                }
+
+                // Draw current video frame to canvas
+                state.ctx.drawImage(video, 0, 0, state.canvas.width, state.canvas.height);
+                
+                // Get pixel data
+                const imageData = state.ctx.getImageData(0, 0, state.canvas.width, state.canvas.height);
+                const brightness = getAverageBrightness(imageData);
+                
+                state.lastBrightness = brightness;
+                
+                // Sample center region for more stable reading
+                const centerData = state.ctx.getImageData(
+                    state.canvas.width / 4,
+                    state.canvas.height / 4,
+                    state.canvas.width / 2,
+                    state.canvas.height / 2
+                );
+                const centerBrightness = getAverageBrightness(centerData);
+
+                const bit = centerBrightness > CONFIG.BRIGHTNESS_THRESHOLD ? '1' : '0';
+                state.binaryData += bit;
+                state.frameCount++;
+
+                // Update visual indicator
+                updateBrightnessIndicator(centerBrightness);
+
+                // Try to decode when we have enough data
+                if (state.binaryData.length >= CONFIG.MIN_BITS_TO_DECODE) {
+                    convertBinaryToText();
+                }
+
+                // Update debug info every 10 frames
+                if (state.frameCount % 10 === 0) {
+                    updateReceiverDebug(`📊 Frames: ${state.frameCount} | Bits: ${state.binaryData.length} | Brightness: ${centerBrightness.toFixed(0)}`);
+                }
+
             } catch (e) {
                 console.error('Error in captureFrame:', e);
             }
@@ -513,10 +569,35 @@
         function getAverageBrightness(imageData) {
             let sum = 0;
             const data = imageData.data;
+            let pixelCount = 0;
+
             for (let i = 0; i < data.length; i += 4) {
+                // Standard luminosity formula
                 sum += (0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2]);
+                pixelCount++;
             }
-            return sum / (data.length / 4);
+
+            return pixelCount > 0 ? sum / pixelCount : 0;
+        }
+
+        /**
+         * Update brightness indicator
+         */
+        function updateBrightnessIndicator(brightness) {
+            const indicator = document.getElementById('brightnessIndicator');
+            const gray = Math.round(brightness);
+            const color = `rgb(${gray}, ${gray}, ${gray})`;
+            
+            let html = `<div class="brightness-display" style="background-color: ${color};" title="${gray}"></div>`;
+            
+            // Keep last 10 readings
+            const existing = indicator.innerHTML;
+            const displays = existing.match(/<div class="brightness-display"/g) || [];
+            if (displays.length < 10) {
+                indicator.innerHTML = html + existing;
+            } else {
+                indicator.innerHTML = html + existing.substring(0, existing.lastIndexOf('</div>'));
+            }
         }
 
         /**
@@ -526,12 +607,12 @@
             try {
                 const preambleIndex = state.binaryData.indexOf(CONFIG.PREAMBLE);
                 if (preambleIndex === -1) {
-                    return; // Still waiting for preamble
+                    return;
                 }
 
                 const syncIndex = state.binaryData.indexOf(CONFIG.SYNC_WORD, preambleIndex + CONFIG.PREAMBLE.length);
                 if (syncIndex === -1) {
-                    return; // Still waiting for sync
+                    return;
                 }
 
                 const dataStart = syncIndex + CONFIG.SYNC_WORD.length;
@@ -543,25 +624,18 @@
                 }
 
                 let text = binaryToText(binaryData);
-                
-                // Clean up text
                 text = text.replace(/[^\x20-\x7E]/g, '').trim();
 
                 if (text.length > 0) {
                     document.getElementById('receivedMessage').textContent = text;
-                    updateReceiverStatus(`✅ Decoded successfully! (${state.frameCount} frames captured)`, 'success');
+                    updateReceiverStatus(`✅ SUCCESS! Decoded: "${text}" (${state.frameCount} frames)`, 'success');
                     
-                    // Stop auto-updates after successful decode
-                    if (state.receivingInterval) {
-                        clearInterval(state.receivingInterval);
-                    }
-                } else {
-                    updateReceiverStatus('🔍 Decoding in progress...', 'info');
+                    // Keep capturing but don't overwrite successful message
+                    console.log('Message decoded:', text);
                 }
 
             } catch (e) {
                 console.error('Error in convertBinaryToText:', e);
-                updateReceiverStatus('Decode error: ' + e.message, 'error');
             }
         }
 
@@ -572,6 +646,7 @@
             const status = document.getElementById('senderStatus');
             status.textContent = message;
             status.className = 'status ' + type;
+            console.log('[SENDER]', message);
         }
 
         /**
@@ -581,6 +656,7 @@
             const status = document.getElementById('receiverStatus');
             status.textContent = message;
             status.className = 'status ' + type;
+            console.log('[RECEIVER]', message);
         }
 
         /**
@@ -596,6 +672,7 @@
         window.addEventListener('DOMContentLoaded', () => {
             console.log('VLC Messenger initialized');
             console.log('ECC enabled:', CONFIG.USE_ECC);
+            console.log('Frame rate:', CONFIG.FRAME_RATE_MS, 'ms');
             switchMode('sender');
         });
     </script>
