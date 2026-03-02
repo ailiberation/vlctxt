@@ -58,6 +58,28 @@
         }
 
         function startFlashing() {
+    const message = document.getElementById('message').value;
+    const binary = textToBinary(message);
+    const encoded = encodeReedSolomon(message); // Encode with RS
+    let index = 0;
+    const encodedBinary = textToBinary(String.fromCharCode(...encoded));
+    flashingInterval = setInterval(() => {
+        if (index < encodedBinary.length) {
+            senderScreen.style.backgroundColor = encodedBinary[index] === '1' ? '#ffffff' : '#000000';
+            index++;
+        } else {
+            senderScreen.style.backgroundColor = '#ffffff';
+            clearInterval(flashingInterval);
+        }
+    }, flashRate);
+}
+
+function encodeReedSolomon(data) {
+    // Simplified Reed-Solomon encoding (using a library)
+    // For demo, assume a (255,223) RS code, correcting up to 16 errors
+    const rs = new ReedSolomon(255, 223);
+    return rs.encode(data.split('').map(c => c.charCodeAt(0)));
+}
             const message = document.getElementById('message').value;
             const binary = textToBinary(message);
             let index = 0;
@@ -92,7 +114,27 @@
           const stream = video.srcObject;
             if (stream) stream.getTracks().forEach(track => track.stop());
             video.srcObject = null;
-            convertBinaryToText();
+            function convertBinaryToText() {
+    let text = '';
+    let bytes = [];
+    for (let i = 0; i < binaryData.length; i += 8) {
+        const byte = binaryData.slice(i, i+8);
+        if (byte.length === 8) bytes.push(parseInt(byte, 2));
+    }
+    try {
+        const decoded = decodeReedSolomon(bytes); // Decode with RS
+        text = String.fromCharCode(...decoded);
+    } catch (e) {
+        text = 'Error decoding';
+    }
+    messageSpan.textContent = text || 'Decoding...';
+}
+
+function decodeReedSolomon(encodedData) {
+    // Simplified Reed-Solomon decoding
+    const rs = new ReedSolomon(255, 223);
+    return rs.decode(encodedData);
+}
         }
 
         function captureFrame() {
