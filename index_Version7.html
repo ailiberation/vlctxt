@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VLC Messenger - Color Shift Keying</title>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        * { box-sizing: border-box; }
+        body { 
+            margin: 0; 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; 
+            background: #f0f0f0;
+            color: #333;
+        }
+        #modeSelect { 
+            text-align: center; 
+            padding: 15px; 
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        button { 
+            padding: 10px 20px; 
+            margin: 5px; 
+            background: #007bff; 
+            color: white; 
+            border: none; 
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+        button:hover { background: #0056b3; transform: translateY(-2px); }
+        button:disabled { background: #ccc; cursor: not-allowed; transform: none; }
+        .tab { display: none; }
+        .tab.active { display: block; }
+        #senderScreen { 
+            width: 100vw; 
+            height: calc(100vh - 200px); 
+            background-color: #ffffff;
+            transition: background-color 0.05s linear;
+        }
+        #video { 
+            width: 100%; 
+            height: calc(100vh - 200px);
+            background: #000;
+            object-fit: cover;
+            display: block;
+        }
+        #canvas { display: none; }
+        .control-panel {
+            position: absolute;
+            top: 70px;
+            left: 15px;
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 20px;
+            border-radius: 8px;
+            z-index: 100;
+            max-width: 320px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.3);
+            max-height: 80vh;
+            overflow-y: auto;
+        }
+        .control-panel h3 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+        }
+        .control-panel label {
+            display: block;
+            margin-top: 10px;
+            font-size: 13px;
+            font-weight: 600;
+        }
+        .control-panel input, .control-panel select {
+            padding: 8px;
+            margin-top: 5px;
+            margin-bottom: 10px;
+            width: 100%;
+            border: none;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+        .output-panel {
+            margin: 15px;
+            padding: 20px;
+            background: white;
+            border-radius: 8px;
+            border-left: 5px solid #007bff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        .output-panel h3 {
+            margin: 0 0 15px 0;
+            font-size: 16px;
+        }
+        #receivedMessage {
+            display: block;
+            font-size: 20px;
+            font-weight: bold;
+            color: #333;
+            padding: 15px;
+            background: #f5f5f5;
+            border-radius: 4px;
+            margin: 10px 0;
+            word-break: break-all;
+            min-height: 50px;
+        }
+        .status {
+            font-size: 11px;
+            color: #666;
+            margin-top: 10px;
+            padding: 10px;
+            border-radius: 4px;
+            background: #f9f9f9;
+            max-height: 300px;
+            overflow-y: auto;
+            font-family: monospace;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            border: 1px solid #ddd;
+        }
+        .error { color: #d32f2f; background: #ffebee; border: 1px solid #ef5350; }
+        .success { color: #388e3c; background: #e8f5e9; border: 1px solid #66bb6a; }
+        .info { color: #1976d2; background: #e3f2fd; border: 1px solid #42a5f5; }
+        .warning { color: #f57f17; background: #fff3e0; border: 1px solid #ffb74d; }
+        
+        .color-indicator {
+            display: flex;
+            gap: 5px;
+            margin: 10px 0;
+        }
+        .color-sample {
+            width: 40px;
+            height: 40px;
+            border-radius: 4px;
+            border: 2px solid #999;
+        }
+        .info-box {
+            font-size: 12px;
+            background: #f0f0f0;
+            padding: 10px;
+            border-radius: 4px;
+            margin: 10px 0;
+        }
+    </style>
+</head>
+<body>
+    <div id="modeSelect">
+        <button onclick="switchMode('sender')">📤 Sender Mode</button>
+        <button onclick="switchMode('receiver')">📥 Receiver Mode</button>
+    </div>
+
+    <div id="sender" class="tab">
+        <div id="senderScreen"></div>
+        <div class="control-panel">
+            <h3>📤 CSK Sender</h3>
+            <label>Message:</label>
+            <input type="text" id="message" value="Hi" placeholder="Enter message">
+            <label>Flash Speed (ms):</label>
+            <input type="number" id="flashSpeed" value="150" min="50" max="300" step="10">
+            
+            <div class="info-box">
+                <strong>Color Shift Keying</strong><br>
+                Red = 1<br>
+                Green = 0<br>
+                Immune to brightness changes
+            </div>
+            
+            <button onclick="startFlashing()" id="startBtn">▶ Start Sending</button>
+            <button onclick="stopFlashing()" id="stopBtn" disabled>⏹ Stop</button>
+            <div class="status" id="senderStatus"></div>
+        </div>
+    </div>
+
+    <div id="receiver" class="tab">
+        <video id="video" autoplay playsinline muted></video>
+        <canvas id="canvas"></canvas>
+        <div style="text-align: center; padding: 10px;">
+            <button onclick="startReceiving()" id="receiveStartBtn">▶ Start Receiving</button>
+            <button onclick="stopReceiving()" id="receiveStopBtn" disabled>⏹ Stop</button>
+        </div>
+        <div class="output-panel">
+            <h3>📥 CSK Receiver</h3>
+            <div id="receivedMessage">Waiting for signal...</div>
+            
+            <h4>Color Detection</h4>
+            <div class="color-indicator">
+                <div>Red:</div>
+                <div id="redLevel" style="color: red; font-weight: bold;">0%</div>
+                <div>Green:</div>
+                <div id="greenLevel" style="color: green; font-weight: bold;">0%</div>
+                <div>Blue:</div>
+                <div id="blueLevel" style="color: blue; font-weight: bold;">0%</div>
+            </div>
+            
+            <h4>Color Ratio</h4>
+            <div id="colorRatio" class="info-box"></div>
+            
+            <div class="status info" id="receiverStats"></div>
+            <div class="status" id="receiverDebug"></div>
+        </div>
+    </div>
+
+    <script>
+      // 1. Reference your existing HTML elements
+const video = document.getElementById('video');
+const canvas = document.createElement('canvas'); // Off-screen processing
+const ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+let lastFrameTime = 0;
+const frameInterval = 1000 / 60; // Target 60fps (~16.6ms)
+
+// 2. Request Camera Access (Crucial for PWAs)
+async function startCamera() {
+    try {
+        const stream = await navigator.mediaDevices.getUserMedia({ 
+            video: { 
+                facingMode: 'environment', // Use back camera
+                frameRate: { ideal: 60 } 
+            } 
+        });
+        video.srcObject = stream;
+        video.play();
+        requestAnimationFrame(processVLCLoop);
+    } catch (err) {
+        console.error("Camera access denied:", err);
+    }
+}
+
+// 3. The 60fps Sync & Processing Loop
+function processVLCLoop(timestamp) {
+    const deltaTime = timestamp - lastFrameTime;
+
+    if (deltaTime >= frameInterval) {
+        lastFrameTime = timestamp - (deltaTime % frameInterval);
+
+        if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            // Draw current frame to hidden canvas for pixel sampling
+            canvas.width = video.videoWidth;
+            canvas.height = video.videoHeight;
+            ctx.drawImage(video, 0, 0);
+
+            // Sample center pixel for Color Shift Keying (CSK)
+            const pixel = ctx.getImageData(canvas.width / 2, canvas.height / 2, 1, 1).data;
+            const [r, g, b] = [pixel[0], pixel[1], pixel[2]];
+
+            // 4. Run your Sync/Demodulation logic
+            handleCSK(r, g, b);
+        }
+    }
+    requestAnimationFrame(processVLCLoop);
+}
+function handleCSK(r, g, b) {
+    // This is where you'll use your JSON constellation data 
+    // to match (r,g,b) to bits.
+    // console.log(`RGB: ${r},${g},${b}`); 
+}
+
+// Kick it off
+startCamera();
+
+        const DEBUG = {
+            logs: { sender: [], receiver: [] },
+            log(mode, message) {
+                const timestamp = new Date().toLocaleTimeString();
+                const fullMsg = `[${timestamp}] ${message}`;
+                this.logs[mode].push(fullMsg);
+                console.log(`[${mode.toUpperCase()}]`, message);
+                
+                const element = document.getElementById(mode + 'Status');
+                if (element) {
+                    element.textContent = this.logs[mode].slice(-15).join('\n');
+                    element.scrollTop = element.scrollHeight;
+                }
+            },
+            error(mode, message) { this.log(mode, `❌ ${message}`); },
+            success(mode, message) { this.log(mode, `✅ ${message}`); },
+            info(mode, message) { this.log(mode, `ℹ️  ${message}`); }
+        };
+
+        // ============================================
+        // ERROR CORRECTION - HAMMING(7,4)
+        // ============================================
+        class SimpleECC {
+            static encode7_4(dataBits) {
+                const d1 = parseInt(dataBits[0]);
+                const d2 = parseInt(dataBits[1]);
+                const d3 = parseInt(dataBits[2]);
+                const d4 = parseInt(dataBits[3]);
+
+                const p1 = (d1 + d2 + d4) % 2;
+                const p2 = (d1 + d3 + d4) % 2;
+                const p3 = (d2 + d3 + d4) % 2;
+
+                return `${p1}${p2}${d1}${p3}${d2}${d3}${d4}`;
+            }
+
+            static decode7_4(encodedBits) {
+                const bits = encodedBits.split('').map(Number);
+                const [p1, p2, d1, p3, d2, d3, d4] = bits;
+
+                const s1 = (p1 + d1 + d4) % 2;
+                const s2 = (p2 + d1 + d3 + d4) % 2;
+                const s3 = (p3 + d2 + d3 + d4) % 2;
+
+                const errorPos = s1 * 1 + s2 * 2 + s3 * 4;
+
+                if (errorPos > 0) {
+                    bits[errorPos - 1] = 1 - bits[errorPos - 1];
+                }
+
+                return `${bits[2]}${bits[4]}${bits[5]}${bits[6]}`;
+            }
+
+            static encodeChar(char) {
+                const code = char.charCodeAt(0);
+                const binary = code.toString(2).padStart(8, '0');
+                const chunk1 = binary.substring(0, 4);
+                const chunk2 = binary.substring(4, 8);
+                return this.encode7_4(chunk1) + this.encode7_4(chunk2);
+            }
+
+            static decodeChar(binaryStr) {
+                if (binaryStr.length < 14) return '';
+                const data1 = this.decode7_4(binaryStr.substring(0, 7));
+                const data2 = this.decode7_4(binaryStr.substring(7, 14));
+                const binary = data1 + data2;
+                const code = parseInt(binary, 2);
+                return code > 0 && code < 127 ? String.fromCharCode(code) : '';
+            }
+        }
+
+        // ============================================
+        // COLOR SHIFT KEYING (CSK) MODULATION
+        // ============================================
+        class CSK {
+            // Red = 1, Green = 0
+            static getColor(bit) {
+                return bit === '1' 
+                    ? { r: 255, g: 0, b: 0 }      // Red for 1
+                    : { r: 0, g: 200, b: 0 };     // Green for 0
+            }
+
+            static colorToCSS(color) {
+                return `rgb(${color.r}, ${color.g}, ${color.b})`;
+            }
+
+            // Detect if received color is closer to red (1) or green (0)
+            static detectBit(r, g, b) {
+                // Red dominance = 1, Green dominance = 0
+                const redScore = r - g - b;
+                const greenScore = g - r - b;
+                return redScore > greenScore ? '1' : '0';
+            }
+
+            // Get average color from image data
+            static getAverageColor(imageData) {
+                let r = 0, g = 0, b = 0;
+                const data = imageData.data;
+                
+                for (let i = 0; i < data.length; i += 4) {
+                    r += data[i];
+                    g += data[i + 1];
+                    b += data[i + 2];
+                }
+                
+                const pixelCount = data.length / 4;
+                return {
+                    r: Math.round(r / pixelCount),
+                    g: Math.round(g / pixelCount),
+                    b: Math.round(b / pixelCount)
+                };
+            }
+
+            // Calculate color ratio for debugging
+            static getColorRatio(color) {
+                const total = color.r + color.g + color.b;
+                if (total === 0) return { r: 0, g: 0, b: 0 };
+                return {
+                    r: Math.round((color.r / total) * 100),
+                    g: Math.round((color.g / total) * 100),
+                    b: Math.round((color.b / total) * 100)
+                };
+            }
+        }
+
+        // ============================================
+        // CONFIG & STATE
+        // ============================================
+        const CONFIG = {
+            FRAME_RATE_MS: 100,
+            MIN_BITS_FOR_CHAR: 14,
+        };
+
+        let state = {
+            isReceiving: false,
+            isSending: false,
+            binaryData: '',
+            frameCount: 0,
+            canvas: null,
+            ctx: null,
+            video: null,
+            lastCaptureTime: 0,
+            receivedChars: ''
+        };
+
+        function switchMode(mode) {
+            document.querySelectorAll('.tab').forEach(tab => tab.classList.remove('active'));
+            document.getElementById(mode).classList.add('active');
+            stopFlashing();
+            stopReceiving();
+        }
+
+        /**
+         * TEXT TO BINARY using Hamming ECC
+         */
+        function textToBinary(text) {
+            let binary = '';
+            for (let i = 0; i < text.length; i++) {
+                binary += SimpleECC.encodeChar(text[i]);
+            }
+            return binary;
+        }
+
+        /**
+         * SENDER: START FLASHING WITH CSK
+         */
+        async function startFlashing() {
+            if (state.isSending) return;
+
+            const message = document.getElementById('message').value;
+            const flashSpeed = parseInt(document.getElementById('flashSpeed').value);
+
+            if (!message) {
+                DEBUG.error('sender', 'Please enter a message');
+                return;
+            }
+
+            state.isSending = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+
+            try {
+                DEBUG.info('sender', `Encoding: "${message}"`);
+                const payload = textToBinary(message);
+                DEBUG.success('sender', `Payload: ${payload.length} bits with Hamming(7,4) ECC`);
+                DEBUG.info('sender', 'Using CSK: Red=1, Green=0');
+
+                let bitIndex = 0;
+                const screen = document.getElementById('senderScreen');
+                state.frameCount = 0;
+
+                state.flashingInterval = setInterval(() => {
+                    if (bitIndex < payload.length) {
+                        const bit = payload[bitIndex];
+                        const color = CSK.getColor(bit);
+                        screen.style.backgroundColor = CSK.colorToCSS(color);
+                        bitIndex++;
+                        state.frameCount++;
+                    } else {
+                        screen.style.backgroundColor = 'rgb(255, 255, 255)'; // White when done
+                        clearInterval(state.flashingInterval);
+                        state.isSending = false;
+                        document.getElementById('startBtn').disabled = false;
+                        document.getElementById('stopBtn').disabled = true;
+                        DEBUG.success('sender', `Done! Sent ${state.frameCount} frames`);
+                    }
+                }, flashSpeed);
+
+            } catch (e) {
+                DEBUG.error('sender', e.message);
+                state.isSending = false;
+                document.getElementById('startBtn').disabled = false;
+                document.getElementById('stopBtn').disabled = true;
+            }
+        }
+
+        function stopFlashing() {
+            if (state.flashingInterval) clearInterval(state.flashingInterval);
+            document.getElementById('senderScreen').style.backgroundColor = '#ffffff';
+            state.isSending = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+        }
+
+        /**
+         * RECEIVER: START RECEIVING
+         */
+        async function startReceiving() {
+            if (state.isReceiving) return;
+
+            state.isReceiving = true;
+            state.binaryData = '';
+            state.frameCount = 0;
+            state.receivedChars = '';
+            document.getElementById('receiveStartBtn').disabled = true;
+            document.getElementById('receiveStopBtn').disabled = false;
+
+            try {
+                DEBUG.info('receiver', 'Requesting camera...');
+                const stream = await navigator.mediaDevices.getUserMedia({
+                    video: { facingMode: 'environment', width: { ideal: 1280 }, height: { ideal: 720 } },
+                    audio: false
+                });
+                DEBUG.success('receiver', 'Camera stream obtained');
+
+                const video = document.getElementById('video');
+                video.srcObject = stream;
+                state.video = video;
+
+                await new Promise((resolve) => {
+                    const handler = () => {
+                        video.removeEventListener('loadedmetadata', handler);
+                        resolve();
+                    };
+                    video.addEventListener('loadedmetadata', handler);
+                    setTimeout(resolve, 3000);
+                });
+
+                const canvas = document.getElementById('canvas');
+                canvas.width = video.videoWidth || 1280;
+                canvas.height = video.videoHeight || 720;
+                state.canvas = canvas;
+                state.ctx = canvas.getContext('2d', { willReadFrequently: true });
+
+                DEBUG.success('receiver', `Canvas: ${canvas.width}x${canvas.height}`);
+                DEBUG.info('receiver', 'Ready! Using Color Shift Keying detection...');
+
+                document.getElementById('receivedMessage').textContent = '🎧 Listening...';
+
+                startCaptureLoop();
+
+            } catch (e) {
+                DEBUG.error('receiver', e.message);
+                state.isReceiving = false;
+                if (state.video?.srcObject) {
+                    state.video.srcObject.getTracks().forEach(t => t.stop());
+                }
+                document.getElementById('receiveStartBtn').disabled = false;
+                document.getElementById('receiveStopBtn').disabled = true;
+            }
+        }
+
+        function stopReceiving() {
+            state.isReceiving = false;
+            if (state.video?.srcObject) {
+                state.video.srcObject.getTracks().forEach(t => t.stop());
+                state.video.srcObject = null;
+            }
+            document.getElementById('receiveStartBtn').disabled = false;
+            document.getElementById('receiveStopBtn').disabled = true;
+        }
+
+        /**
+         * CAPTURE LOOP
+         */
+        function startCaptureLoop() {
+            function loop() {
+                if (!state.isReceiving) return;
+                const now = Date.now();
+                if (now - state.lastCaptureTime >= CONFIG.FRAME_RATE_MS) {
+                    captureFrame();
+                    state.lastCaptureTime = now;
+                }
+                if (state.isReceiving) requestAnimationFrame(loop);
+            }
+            requestAnimationFrame(loop);
+        }
+
+        /**
+         * CAPTURE FRAME - CSK DETECTION
+         */
+        function captureFrame() {
+            if (!state.canvas || !state.ctx || !state.video) return;
+            if (state.video.readyState < 2) return;
+
+            try {
+                state.ctx.drawImage(state.video, 0, 0, state.canvas.width, state.canvas.height);
+                const imageData = state.ctx.getImageData(0, 0, state.canvas.width, state.canvas.height);
+                
+                // Get average color
+                const color = CSK.getAverageColor(imageData);
+                const ratio = CSK.getColorRatio(color);
+                
+                // Update UI
+                document.getElementById('redLevel').textContent = ratio.r + '%';
+                document.getElementById('greenLevel').textContent = ratio.g + '%';
+                document.getElementById('blueLevel').textContent = ratio.b + '%';
+                document.getElementById('colorRatio').innerHTML = 
+                    `R: <span style="color:red">${color.r}</span> | ` +
+                    `G: <span style="color:green">${color.g}</span> | ` +
+                    `B: <span style="color:blue">${color.b}</span><br>` +
+                    `Ratio: R=${ratio.r}% G=${ratio.g}% B=${ratio.b}%`;
+
+                // Detect bit using CSK
+                const bit = CSK.detectBit(color.r, color.g, color.b);
+                state.binaryData += bit;
+                state.frameCount++;
+
+                // Try to decode
+                tryDecode();
+
+                // Update stats every 50 frames
+                if (state.frameCount % 50 === 0) {
+                    updateStats();
+                }
+
+            } catch (e) {
+                DEBUG.error('receiver', `Capture: ${e.message}`);
+            }
+        }
+
+        /**
+         * TRY DECODE
+         */
+        function tryDecode() {
+            const step = 14; // Hamming(7,4) encoded char = 14 bits
+            
+            while (state.binaryData.length >= step) {
+                const chunk = state.binaryData.substring(0, step);
+                const char = SimpleECC.decodeChar(chunk);
+
+                if (char && char.match(/[a-zA-Z0-9 ]/)) {
+                    state.receivedChars += char;
+                    document.getElementById('receivedMessage').textContent = state.receivedChars;
+                    DEBUG.success('receiver', `Got char: "${char}" (bits: ${chunk})`);
+                }
+
+                state.binaryData = state.binaryData.substring(step);
+            }
+        }
+
+        /**
+         * UPDATE STATS
+         */
+        function updateStats() {
+            const statsEl = document.getElementById('receiverStats');
+            statsEl.textContent = `Frames: ${state.frameCount} | Bits buffered: ${state.binaryData.length} | Chars received: ${state.receivedChars.length}`;
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
+            DEBUG.success('sender', 'CSK Messenger Ready');
+            switchMode('sender');
+        });
+    </script>
+</body>
+</html>
