@@ -1,3 +1,24 @@
+async function secureTransmit(plainText, secretKey) {
+    // 1. Generate an Initialization Vector (IV)
+    const iv = window.crypto.getRandomValues(new Uint8Array(12));
+    const encoder = new TextEncoder();
+    
+    // 2. Encrypt the data
+    const encryptedContent = await window.crypto.subtle.encrypt(
+        { name: "AES-GCM", iv: iv },
+        secretKey,
+        encoder.encode(plainText)
+    );
+
+    // 3. Package IV + Ciphertext for the Acoustic Burst
+    const packet = new Uint8Array(iv.byteLength + encryptedContent.byteLength);
+    packet.set(iv, 0);
+    packet.set(new Uint8Array(encryptedContent), iv.byteLength);
+
+    // 4. Send over the "Static"
+    transmit(packet); 
+}
+
 // Initializing the "Acoustic Deck"
 let ggwave = null;
 const log = document.getElementById('log');
