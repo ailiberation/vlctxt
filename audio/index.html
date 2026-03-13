@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <link rel="manifest" href="manifest.json">
+    <style>
+        :root { --neon: #00ffcc; --bg: #0d0211; }
+        body { background: var(--bg); color: var(--neon); font-family: 'Courier New', monospace; }
+        #terminal { border: 1px solid var(--neon); padding: 20px; height: 80vh; overflow-y: scroll; box-shadow: 0 0 15px var(--neon); }
+        .glitch { text-shadow: 2px 0 #ff00ff, -2px 0 #00ffff; animation: glitch 2s infinite; }
+        @keyframes glitch { 0% { opacity: 1; } 50% { opacity: 0.8; } 100% { opacity: 1; } }
+        input { background: transparent; border: none; color: var(--neon); outline: none; width: 100%; }
+    </style>
+</head>
+<body>
+    <div id="terminal">
+        <div class="glitch">[V-TERMINAL_v4.2] STATIC ON THE LINE...</div>
+        <div id="log"></div>
+        <div id="input-line">> <input type="text" id="cmd" autofocus></div>
+    </div>
+    <script src="https://cdn.jsdelivr.net/npm/ggwave/ggwave.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
