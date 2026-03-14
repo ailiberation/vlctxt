@@ -1,19 +1,23 @@
 // --- 1. THE SHIELD (Service Worker) ---
-if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-        navigator.serviceWorker.register('./sw.js').then(reg => console.log("OFFLINE CACHE READY"));
-    });
-}
+// sw.js removed - add the file back if you want offline caching
 
 // --- 2. THE CORE ---
 let ggwave = null;
+let instance = null;
 let sessionKey = null; // This holds our "Shared Secret"
 const log = document.getElementById('log');
 const cmdInput = document.getElementById('cmd');
 const terminal = document.getElementById('terminal');
 
+// Shared AudioContext (reused across all transmissions)
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
 ggwave_factory().then(obj => {
     ggwave = obj;
+    const parameters = ggwave.getDefaultParameters();
+    parameters.sampleRateInp = audioCtx.sampleRate;
+    parameters.sampleRateOut = audioCtx.sampleRate;
+    instance = ggwave.init(parameters);
     addLine("SYSTEM READY. ENCRYPTION MODULE LOADED.");
     addLine("STEP 1: TYPE 'KEY [YOUR_PASSWORD]' TO SET THE SECRET.");
     addLine("STEP 2: TYPE 'START' TO INITIALIZE LISTENER.");
@@ -59,26 +63,24 @@ async function decrypt(base64) {
 // --- 4. THE MODEM ---
 function transmit(text) {
     const protocolId = 5; // Ultrasonic
-    const waveform = ggwave.encode(text, protocolId, 10);
-    const context = new (window.AudioContext || window.webkitAudioContext)();
-    const buffer = context.createBuffer(1, waveform.length, 44100);
+    const waveform = ggwave.encode(instance, text, protocolId, 10);
+    const buffer = audioCtx.createBuffer(1, waveform.length, audioCtx.sampleRate);
     buffer.getChannelData(0).set(waveform);
-    const source = context.createBufferSource();
+    const source = audioCtx.createBufferSource();
     source.buffer = buffer;
-    source.connect(context.destination);
+    source.connect(audioCtx.destination);
     source.start();
 }
 
 async function startListener() {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    const context = new AudioContext();
-    const source = context.createMediaStreamSource(stream);
-    const processor = context.createScriptProcessor(1024, 1, 1);
+    const source = audioCtx.createMediaStreamSource(stream);
+    const processor = audioCtx.createScriptProcessor(1024, 1, 1);
     source.connect(processor);
-    processor.connect(context.destination);
+    processor.connect(audioCtx.destination);
 
     processor.onaudioprocess = async (e) => {
-        const result = ggwave.decode(e.inputBuffer.getChannelData(0));
+        const result = ggwave.decode(instance, e.inputBuffer.getChannelData(0));
         if (result && result.length > 0) {
             const rawText = new TextDecoder().decode(result);
             const clearText = await decrypt(rawText);
