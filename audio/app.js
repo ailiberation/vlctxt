@@ -4,7 +4,7 @@
 // --- 2. THE CORE ---
 let ggwave = null;
 let instance = null;
-let sessionKey = null; // This holds our "Shared Secret"
+let sessionKey = null;
 const log = document.getElementById('log');
 const cmdInput = document.getElementById('cmd');
 const terminal = document.getElementById('terminal');
@@ -73,30 +73,58 @@ function transmit(text) {
 }
 
 async function startListener() {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
-    const source = audioCtx.createMediaStreamSource(stream);
-    const processor = audioCtx.createScriptProcessor(1024, 1, 1);
-    source.connect(processor);
-    processor.connect(audioCtx.destination);
-
-    processor.onaudioprocess = async (e) => {
-        const result = ggwave.decode(instance, e.inputBuffer.getChannelData(0));
-        if (result && result.length > 0) {
-            const rawText = new TextDecoder().decode(result);
-            const clearText = await decrypt(rawText);
-            addLine(`INCOMING: ${clearText}`);
-            terminal.style.borderColor = "#ff00ff";
-            setTimeout(() => terminal.style.borderColor = "var(--neon)", 500);
+    try {
+        // Resume context in case it was suspended (required on mobile)
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
         }
-    };
-    addLine("SCANNING ULTRASONIC BANDS...");
+
+        // Load the AudioWorklet processor
+        await audioCtx.audioWorklet.addModule('ggwave-processor.js');
+
+        const stream = await navigator.mediaDevices.getUserMedia({
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: false
+            }
+        });
+
+        const source = audioCtx.createMediaStreamSource(stream);
+        const workletNode = new AudioWorkletNode(audioCtx, 'ggwave-processor');
+
+        // Receive audio chunks from worklet and decode
+        workletNode.port.onmessage = async (e) => {
+            const result = ggwave.decode(instance, e.data);
+            if (result && result.length > 0) {
+                const rawText = new TextDecoder().decode(result);
+                const clearText = await decrypt(rawText);
+                addLine(`INCOMING: ${clearText}`);
+                terminal.style.borderColor = "#ff00ff";
+                setTimeout(() => terminal.style.borderColor = "var(--neon)", 500);
+            }
+        };
+
+        // Connect mic -> worklet (no connection to destination, avoids feedback)
+        source.connect(workletNode);
+
+        addLine("SCANNING ULTRASONIC BANDS...");
+    } catch (err) {
+        addLine(`ERROR STARTING LISTENER: ${err.message}`);
+    }
 }
 
 // --- 5. THE COMMANDER ---
 cmdInput.addEventListener('keypress', async (e) => {
     if (e.key === 'Enter') {
+        // Resume AudioContext on user interaction (required by mobile browsers)
+        if (audioCtx.state === 'suspended') {
+            await audioCtx.resume();
+        }
+
         const val = cmdInput.value.trim();
         cmdInput.value = '';
+
         if (val.toLowerCase().startsWith('key ')) {
             sessionKey = await getKey(val.split(' ')[1]);
             addLine("SESSION KEY INSTALLED.");
@@ -107,7 +135,9 @@ cmdInput.addEventListener('keypress', async (e) => {
             if (secretPayload) {
                 transmit(secretPayload);
                 addLine(`OUTGOING (SECURE): ${val}`);
-            } else { addLine("ERROR: SET KEY FIRST."); }
+            } else {
+                addLine("ERROR: SET KEY FIRST.");
+            }
         }
     }
 });
